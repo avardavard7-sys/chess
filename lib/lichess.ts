@@ -54,8 +54,8 @@ export async function exchangeCode(code: string): Promise<string> {
 
   const res = await fetch(`${ENGINE_BASE}/api/token`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
       grant_type: 'authorization_code',
       code,
       code_verifier: verifier,
@@ -120,21 +120,29 @@ export async function getNetworkUser(token: string): Promise<NetworkUser> {
 
 // ─── Game seek ────────────────────────────────────────────────────────────────
 
-export async function createSeek(token: string): Promise<void> {
-  // Fire and forget — game will arrive via event stream
-  fetch(`${ENGINE_BASE}/api/board/seek`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      rated: 'false',
-      time: '10',
-      increment: '5',
-      color: 'random',
-    }),
-  }).catch(() => {});
+export async function createSeek(token: string, signal?: AbortSignal): Promise<boolean> {
+  try {
+    const res = await fetch(`${ENGINE_BASE}/api/board/seek`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        rated: 'false',
+        time: '10',
+        increment: '5',
+        color: 'random',
+      }),
+      signal,
+    });
+    return res.ok;
+  } catch (err: unknown) {
+    if ((err as Error)?.name !== 'AbortError') {
+      console.error('Seek error:', err);
+    }
+    return false;
+  }
 }
 
 export async function cancelSeek(token: string): Promise<void> {

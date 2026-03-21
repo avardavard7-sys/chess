@@ -82,8 +82,29 @@ export default function OnlineMatchmaking() {
 
     abortRef.current = new AbortController();
 
+    // Verify token is still valid
+    try {
+      const user = await getNetworkUser(token);
+      setNetUser(user);
+      localStorage.setItem('net_user', JSON.stringify(user));
+    } catch {
+      // Token expired or invalid — clear and fall back to local
+      localStorage.removeItem('net_token');
+      localStorage.removeItem('net_user');
+      setNetUser(null);
+      clearTimers();
+      setState('idle');
+      if (localUser) {
+        startLocalSearch();
+      }
+      return;
+    }
+
     // Create seek on the network
-    await createSeek(token);
+    const seekOk = await createSeek(token, abortRef.current.signal);
+    if (!seekOk && !abortRef.current.signal.aborted) {
+      console.error('Failed to create seek');
+    }
 
     // Listen for game start via event stream
     streamEvents(token, (event: NetworkEvent) => {
@@ -98,7 +119,7 @@ export default function OnlineMatchmaking() {
         setTimeout(() => setState('playing'), 1000);
       }
     }, abortRef.current.signal);
-  }, []);
+  }, [localUser]);
 
   const startLocalSearch = useCallback(async () => {
     if (!localUser) return;
