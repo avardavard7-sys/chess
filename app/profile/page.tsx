@@ -34,8 +34,7 @@ export default function ProfilePage() {
 
   useEffect(() => {
     const load = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      const user = session?.user;
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setNotLoggedIn(true);
         setLoading(false);
@@ -46,7 +45,7 @@ export default function ProfilePage() {
         const meta = user.user_metadata || {};
         const username = meta.name || meta.full_name || user.email?.split('@')[0] || 'Player';
         const avatar_url = meta.avatar_url || meta.picture || '';
-        await supabase.from('profiles').upsert({
+        const { error: upsertError } = await supabase.from('profiles').upsert({
           id: user.id,
           username,
           avatar_url,
@@ -57,6 +56,9 @@ export default function ProfilePage() {
           games_lost: 0,
           games_draw: 0,
         }, { onConflict: 'id' });
+        if (upsertError) {
+          console.error('Profile upsert error:', upsertError);
+        }
         const { data: newProf } = await getProfile(user.id);
         prof = newProf;
       }
