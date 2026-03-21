@@ -120,12 +120,7 @@ export async function getNetworkUser(token: string): Promise<NetworkUser> {
 
 // ─── Game seek ────────────────────────────────────────────────────────────────
 
-export interface SeekResult {
-  gameId: string;
-  color: 'white' | 'black';
-}
-
-export async function createSeek(token: string, signal?: AbortSignal): Promise<SeekResult | null> {
+export async function createSeek(token: string, signal?: AbortSignal): Promise<void> {
   try {
     const res = await fetch(`${ENGINE_BASE}/api/board/seek`, {
       method: 'POST',
@@ -142,35 +137,23 @@ export async function createSeek(token: string, signal?: AbortSignal): Promise<S
       signal,
     });
 
-    if (!res.ok || !res.body) return null;
+    if (!res.ok) {
+      console.error('Seek failed:', res.status);
+      return;
+    }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done || signal?.aborted) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const data = JSON.parse(line);
-          if (data.id) {
-            return { gameId: data.id, color: (data.color || 'white') as 'white' | 'black' };
-          }
-        } catch {}
+    // Keep reading to hold the connection open (seek is active while connected)
+    if (res.body) {
+      const reader = res.body.getReader();
+      while (true) {
+        const { done } = await reader.read();
+        if (done || signal?.aborted) break;
       }
     }
-    return null;
   } catch (err: unknown) {
     if ((err as Error)?.name !== 'AbortError') {
       console.error('Seek error:', err);
     }
-    return null;
   }
 }
 

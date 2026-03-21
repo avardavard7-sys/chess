@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import {
   hasToken, getToken, startOAuth, getNetworkUser,
-  createSeek, type NetworkUser, type SeekResult,
+  createSeek, streamEvents, type NetworkUser, type NetworkEvent,
 } from '@/lib/lichess';
 import { supabase } from '@/lib/supabase';
 import { addToMatchmakingQueue, removeFromMatchmakingQueue, findMatch, createGameSession, getProfile } from '@/lib/supabase';
@@ -81,17 +81,29 @@ export default function OnlineMatchmaking() {
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
 
     abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
 
-    // createSeek blocks until a game is found — returns game info directly
-    createSeek(token, abortRef.current.signal).then((result: SeekResult | null) => {
-      if (result && !abortRef.current?.signal.aborted) {
+    // Listen for game start via event stream
+    streamEvents(token, (event: NetworkEvent) => {
+      if (event.type === 'gameStart' && event.game.compat?.board) {
         clearTimers();
-        setGameId(result.gameId);
-        setMyColor(result.color);
+        setGameId(event.game.gameId);
+        setMyColor(event.game.color as 'white' | 'black');
         setState('found');
         setTimeout(() => setState('playing'), 1000);
       }
-    });
+    }, signal);
+
+    // Create seek (keeps connection open while searching, auto-retry if cancelled)
+    const trySeek = async () => {
+      while (!signal.aborted) {
+        await createSeek(token, signal);
+        if (signal.aborted) break;
+        // Seek ended without abort — retry after short delay
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    };
+    trySeek();
   }, []);
 
   const startLocalSearch = useCallback(async () => {
