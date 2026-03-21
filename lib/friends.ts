@@ -39,7 +39,8 @@ export async function getFriends(userId: string) {
   if (!data) return [];
   return data.map((f) => {
     const isMe = f.user_id === userId;
-    const profile = isMe ? f.friend : f.user;
+    const raw = isMe ? f.friend : f.user;
+    const profile = Array.isArray(raw) ? raw[0] : raw;
     return { friendshipId: f.id, ...(profile as { id: string; username: string; avatar_url: string; elo_rating: number; rank: string }) };
   });
 }
