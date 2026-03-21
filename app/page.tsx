@@ -30,7 +30,7 @@ export default function HomePage() {
         if (!existing) {
           await supabase.from('profiles').insert({
             id: user.id, username, avatar_url: avatarUrl,
-            elo_rating: 1200, rank: '🌱 Новичок',
+            elo_rating: 0, rank: '👶 Малыш',
             games_played: 0, games_won: 0, games_lost: 0, games_draw: 0,
           });
         }

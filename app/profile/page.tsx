@@ -49,8 +49,8 @@ export default function ProfilePage() {
           id: user.id,
           username,
           avatar_url,
-          elo_rating: 1200,
-          rank: '\u{1F331} \u041d\u043e\u0432\u0438\u0447\u043e\u043a',
+          elo_rating: 0,
+          rank: '\u{1F476} \u041c\u0430\u043b\u044b\u0448',
           games_played: 0,
           games_won: 0,
           games_lost: 0,
@@ -118,7 +118,7 @@ export default function ProfilePage() {
               Выйти
             </motion.button>
           </motion.div>
-          {profile && <ProfileCard profile={profile} gameHistory={gameHistory} />}
+          {profile && <ProfileCard profile={profile} gameHistory={gameHistory} onProfileUpdate={setProfile} />}
           {!profile && (
             <div className="glass p-8 rounded-2xl text-center">
               <p className="text-white/50">Профиль не найден. Попробуйте войти снова.</p>

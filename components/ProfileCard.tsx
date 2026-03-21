@@ -1,8 +1,10 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import { getRankProgress, getNextRankThreshold, getPrevRankThreshold } from '@/lib/elo';
+import { supabase } from '@/lib/supabase';
 
 interface Profile {
   id: string;
@@ -33,9 +35,45 @@ interface GameHistoryItem {
 interface ProfileCardProps {
   profile: Profile;
   gameHistory: GameHistoryItem[];
+  onProfileUpdate?: (updated: Profile) => void;
 }
 
-export default function ProfileCard({ profile, gameHistory }: ProfileCardProps) {
+export default function ProfileCard({ profile, gameHistory, onProfileUpdate }: ProfileCardProps) {
+  const [editing, setEditing] = useState(false);
+  const [newName, setNewName] = useState(profile.username);
+  const [nameError, setNameError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSaveName = async () => {
+    const trimmed = newName.trim();
+    if (trimmed.length < 2) { setNameError('Минимум 2 символа'); return; }
+    if (trimmed.length > 20) { setNameError('Максимум 20 символов'); return; }
+    if (!/^[a-zA-Zа-яА-ЯёЁ0-9_\- ]+$/.test(trimmed)) { setNameError('Только буквы, цифры, _ и -'); return; }
+    if (trimmed === profile.username) { setEditing(false); return; }
+
+    setSaving(true);
+    setNameError('');
+
+    const { data: existing } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('username', trimmed)
+      .neq('id', profile.id)
+      .single();
+
+    if (existing) { setNameError('Этот ник уже занят'); setSaving(false); return; }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ username: trimmed })
+      .eq('id', profile.id);
+
+    if (error) { setNameError('Ошибка сохранения'); setSaving(false); return; }
+
+    setSaving(false);
+    setEditing(false);
+    if (onProfileUpdate) onProfileUpdate({ ...profile, username: trimmed });
+  };
   const winRate = profile.games_played > 0
     ? Math.round((profile.games_won / profile.games_played) * 100)
     : 0;
@@ -82,12 +120,64 @@ export default function ProfileCard({ profile, gameHistory }: ProfileCardProps) 
 
           {/* Info */}
           <div className="flex-1 text-center md:text-left">
-            <h1
-              className="text-3xl font-bold mb-1"
-              style={{ fontFamily: "'Playfair Display', serif" }}
-            >
-              {profile.username}
-            </h1>
+            {!editing ? (
+              <div className="flex items-center gap-2 justify-center md:justify-start mb-1">
+                <h1
+                  className="text-3xl font-bold"
+                  style={{ fontFamily: "'Playfair Display', serif" }}
+                >
+                  {profile.username}
+                </h1>
+                <motion.button
+                  onClick={() => { setEditing(true); setNewName(profile.username); setNameError(''); }}
+                  className="text-white/30 hover:text-yellow-400 transition-colors"
+                  whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                  title="Изменить имя"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>
+                </motion.button>
+              </div>
+            ) : (
+              <div className="mb-1">
+                <div className="flex items-center gap-2 justify-center md:justify-start">
+                  <input
+                    value={newName}
+                    onChange={(e) => { setNewName(e.target.value); setNameError(''); }}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
+                    maxLength={20}
+                    autoFocus
+                    className="bg-white/10 rounded-lg px-3 py-1.5 text-white border border-white/20 focus:border-yellow-400/50 focus:outline-none text-lg font-bold w-48"
+                    style={{ fontFamily: "'Playfair Display', serif" }}
+                  />
+                  <motion.button
+                    onClick={handleSaveName}
+                    disabled={saving}
+                    className="px-3 py-1.5 rounded-lg text-sm font-semibold text-black"
+                    style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+                    whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                  >
+                    {saving ? '...' : 'OK'}
+                  </motion.button>
+                  <motion.button
+                    onClick={() => { setEditing(false); setNameError(''); }}
+                    className="px-3 py-1.5 rounded-lg text-sm border border-white/15 text-white/50 hover:text-white/80"
+                    whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                  >
+                    Отмена
+                  </motion.button>
+                </div>
+                <AnimatePresence>
+                  {nameError && (
+                    <motion.p className="text-red-400 text-xs mt-1" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                      {nameError}
+                    </motion.p>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
             <p className="text-white/50 mb-4 text-sm">{profile.rank}</p>
 
             {/* ELO */}

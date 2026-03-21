@@ -33,8 +33,8 @@ export async function updateElo(userId: string, newElo: number, result: 'win' | 
   if (!profile) return;
   const { getRank } = await import('./elo');
   const updates: Record<string, number | string> = {
-    elo_rating: newElo,
-    rank: getRank(newElo),
+    elo_rating: Math.max(0, newElo),
+    rank: getRank(Math.max(0, newElo)),
     games_played: (profile.games_played || 0) + 1,
   };
   if (result === 'win') updates.games_won = (profile.games_won || 0) + 1;

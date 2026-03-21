@@ -27,7 +27,7 @@ export default function OnlineMatchmaking() {
   const [opponentRating, setOpponentRating] = useState<number | undefined>();
   const [gameResult, setGameResult] = useState<{ result: 'win' | 'loss' | 'draw'; eloChange: number } | null>(null);
   const [localUser, setLocalUser] = useState<{ id: string } | null>(null);
-  const [localElo, setLocalElo] = useState(1200);
+  const [localElo, setLocalElo] = useState(0);
   const [localGames, setLocalGames] = useState(0);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(true);

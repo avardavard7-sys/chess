@@ -42,7 +42,7 @@ export default function ChessBoard({
   const [capturedPieces, setCapturedPieces] = useState<{ white: string[]; black: string[] }>({ white: [], black: [] });
   const [promotionSquare, setPromotionSquare] = useState<{ from: Square; to: Square } | null>(null);
   const [gameOver, setGameOver] = useState<{ status: string; winner?: string } | null>(null);
-  const [playerElo, setPlayerElo] = useState(1200);
+  const [playerElo, setPlayerElo] = useState(0);
   const [gamesPlayed, setGamesPlayed] = useState(0);
   const [boardWidth, setBoardWidth] = useState(480);
   const moveHistoryRef = useRef<HTMLDivElement>(null);
