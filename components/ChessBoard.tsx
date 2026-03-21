@@ -12,7 +12,7 @@ import type { Difficulty } from '@/store/gameStore';
 
 interface ChessBoardProps {
   difficulty: Difficulty;
-  mode: 'ai' | 'local' | 'online';
+  mode: 'ai' | 'local' | 'online' | 'friend';
   isKidsMode?: boolean;
   sessionId?: string;
   playerColor?: 'white' | 'black';
@@ -68,7 +68,7 @@ export default function ChessBoard({
   }, [mode, playerColor, chess]);
 
   useEffect(() => {
-    if (mode === 'ai' || mode === 'online') {
+    if (mode === 'ai' || mode === 'online' || mode === 'friend') {
       supabase.auth.getUser().then(async ({ data: { user } }) => {
         if (user) {
           const { data } = await getProfile(user.id);
@@ -82,7 +82,7 @@ export default function ChessBoard({
   }, [mode]);
 
   useEffect(() => {
-    if (mode !== 'online' || !sessionId) return;
+    if ((mode !== 'online' && mode !== 'friend') || !sessionId) return;
     const channel = supabase.channel(`game:${sessionId}`);
     channelRef.current = channel;
     channel
@@ -125,7 +125,7 @@ export default function ChessBoard({
     if (status.status !== 'playing') {
       gameOverRef.current = true;
       setGameOver({ status: status.status, winner: status.winner });
-      if (mode === 'ai' || mode === 'online') {
+      if (mode === 'ai' || mode === 'online' || mode === 'friend') {
         const result: 'win' | 'loss' | 'draw' =
           status.status === 'checkmate'
             ? status.winner === playerColor ? 'win' : 'loss'
@@ -197,7 +197,7 @@ export default function ChessBoard({
       }
     }, 50);
 
-    if (mode === 'online' && channelRef.current) {
+    if ((mode === 'online' || mode === 'friend') && channelRef.current) {
       await channelRef.current.send({
         type: 'broadcast',
         event: 'MOVE',
@@ -278,7 +278,7 @@ export default function ChessBoard({
 
   const handleResign = async () => {
     if (gameOverRef.current) return;
-    if (mode === 'online' && channelRef.current) {
+    if ((mode === 'online' || mode === 'friend') && channelRef.current) {
       await channelRef.current.send({ type: 'broadcast', event: 'RESIGN', payload: {} });
     }
     gameOverRef.current = true;
@@ -430,6 +430,7 @@ export default function ChessBoard({
           {mode === 'ai' && `🤖 Hod Konem AI · ${DIFFICULTY_CONFIG[difficulty].label} · ELO ${DIFFICULTY_CONFIG[difficulty].eloTarget}`}
           {mode === 'local' && '👥 Игра вдвоём на одном экране'}
           {mode === 'online' && '🌐 Онлайн матч · Рейтинговая партия'}
+          {mode === 'friend' && '👥 Игра с другом'}
         </div>
       </div>
 

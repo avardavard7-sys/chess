@@ -189,6 +189,9 @@ export default function PlayerSidebar({ isOpen, onClose }: PlayerSidebarProps) {
                   <Link href="/profile" onClick={onClose} className="flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/5 hover:text-white transition-all">
                     <span className="text-xl">👤</span><span className="text-sm font-medium">Мой профиль</span>
                   </Link>
+                  <Link href="/friends" onClick={onClose} className="flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/5 hover:text-white transition-all">
+                    <span className="text-xl">👥</span><span className="text-sm font-medium">Друзья</span>
+                  </Link>
                   <Link href="/online" onClick={onClose} className="flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/5 hover:text-white transition-all">
                     <span className="text-xl">🌐</span><span className="text-sm font-medium">Играть онлайн</span>
                   </Link>

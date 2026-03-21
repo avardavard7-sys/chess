@@ -27,6 +27,8 @@ function GameContent({ rawMode }: { rawMode: string }) {
   const searchParams = useSearchParams();
   const gameMode = searchParams.get('mode') === 'local'
     ? 'local'
+    : searchParams.get('mode') === 'friend'
+    ? 'friend'
     : rawMode === 'online'
     ? 'online'
     : 'ai';
@@ -66,6 +68,8 @@ function GameContent({ rawMode }: { rawMode: string }) {
                 ? 'Онлайн матч'
                 : gameMode === 'local'
                 ? 'Игра вдвоём'
+                : gameMode === 'friend'
+                ? 'Игра с другом'
                 : `Уровень: ${diffInfo.label}`}
             </h1>
           </div>
@@ -73,6 +77,7 @@ function GameContent({ rawMode }: { rawMode: string }) {
             {gameMode === 'ai' && 'Вы играете против Hod Konem AI'}
             {gameMode === 'local' && 'Два игрока на одном экране'}
             {gameMode === 'online' && `Вы играете ${playerColor === 'white' ? 'белыми' : 'чёрными'}`}
+            {gameMode === 'friend' && `Вы играете ${playerColor === 'white' ? 'белыми' : 'чёрными'}`}
           </p>
         </motion.div>
 
@@ -94,7 +99,7 @@ function GameContent({ rawMode }: { rawMode: string }) {
         </motion.div>
       </main>
 
-      {gameMode === 'online' && sessionId && (
+      {(gameMode === 'online' || gameMode === 'friend') && sessionId && (
         <OnlineChat sessionId={sessionId} playerColor={playerColor} />
       )}
 
