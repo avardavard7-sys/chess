@@ -71,12 +71,15 @@ export default function OnlineMatchmaking() {
     return () => { stopSearch(); };
   }, []);
 
+  const gameFoundRef = useRef(false);
+
   const startNetworkSearch = useCallback(async () => {
     const token = getToken();
     if (!token) return;
 
     setState('searching');
     setElapsed(0);
+    gameFoundRef.current = false;
 
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
 
@@ -85,8 +88,11 @@ export default function OnlineMatchmaking() {
 
     // Listen for game start via event stream
     streamEvents(token, (event: NetworkEvent) => {
+      if (signal.aborted || gameFoundRef.current) return;
       if (event.type === 'gameStart' && event.game.compat?.board) {
+        gameFoundRef.current = true;
         clearTimers();
+        abortRef.current?.abort();
         setGameId(event.game.gameId);
         setMyColor(event.game.color as 'white' | 'black');
         setState('found');
@@ -94,16 +100,8 @@ export default function OnlineMatchmaking() {
       }
     }, signal);
 
-    // Create seek (keeps connection open while searching, auto-retry if cancelled)
-    const trySeek = async () => {
-      while (!signal.aborted) {
-        await createSeek(token, signal);
-        if (signal.aborted) break;
-        // Seek ended without abort — retry after short delay
-        await new Promise((r) => setTimeout(r, 1500));
-      }
-    };
-    trySeek();
+    // Create seek — single attempt, no auto-retry to avoid rate limits
+    createSeek(token, signal);
   }, []);
 
   const startLocalSearch = useCallback(async () => {
