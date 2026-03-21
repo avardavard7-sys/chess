@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import {
   hasToken, getToken, startOAuth, getNetworkUser,
-  createSeek, streamEvents, type NetworkUser, type NetworkEvent,
+  createSeek, type NetworkUser, type SeekResult,
 } from '@/lib/lichess';
 import { supabase } from '@/lib/supabase';
 import { addToMatchmakingQueue, removeFromMatchmakingQueue, findMatch, createGameSession, getProfile } from '@/lib/supabase';
@@ -82,44 +82,17 @@ export default function OnlineMatchmaking() {
 
     abortRef.current = new AbortController();
 
-    // Verify token is still valid
-    try {
-      const user = await getNetworkUser(token);
-      setNetUser(user);
-      localStorage.setItem('net_user', JSON.stringify(user));
-    } catch {
-      // Token expired or invalid — clear and fall back to local
-      localStorage.removeItem('net_token');
-      localStorage.removeItem('net_user');
-      setNetUser(null);
-      clearTimers();
-      setState('idle');
-      if (localUser) {
-        startLocalSearch();
-      }
-      return;
-    }
-
-    // Create seek on the network
-    const seekOk = await createSeek(token, abortRef.current.signal);
-    if (!seekOk && !abortRef.current.signal.aborted) {
-      console.error('Failed to create seek');
-    }
-
-    // Listen for game start via event stream
-    streamEvents(token, (event: NetworkEvent) => {
-      if (event.type === 'gameStart' && event.game.compat?.board) {
-        const game = event.game;
+    // createSeek blocks until a game is found — returns game info directly
+    createSeek(token, abortRef.current.signal).then((result: SeekResult | null) => {
+      if (result && !abortRef.current?.signal.aborted) {
         clearTimers();
-        setGameId(game.gameId);
-        const color = game.color as 'white' | 'black';
-        setMyColor(color);
+        setGameId(result.gameId);
+        setMyColor(result.color);
         setState('found');
-        // Short delay then start game
         setTimeout(() => setState('playing'), 1000);
       }
-    }, abortRef.current.signal);
-  }, [localUser]);
+    });
+  }, []);
 
   const startLocalSearch = useCallback(async () => {
     if (!localUser) return;

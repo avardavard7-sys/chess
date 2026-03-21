@@ -120,7 +120,12 @@ export async function getNetworkUser(token: string): Promise<NetworkUser> {
 
 // ─── Game seek ────────────────────────────────────────────────────────────────
 
-export async function createSeek(token: string, signal?: AbortSignal): Promise<boolean> {
+export interface SeekResult {
+  gameId: string;
+  color: 'white' | 'black';
+}
+
+export async function createSeek(token: string, signal?: AbortSignal): Promise<SeekResult | null> {
   try {
     const res = await fetch(`${ENGINE_BASE}/api/board/seek`, {
       method: 'POST',
@@ -136,12 +141,36 @@ export async function createSeek(token: string, signal?: AbortSignal): Promise<b
       }),
       signal,
     });
-    return res.ok;
+
+    if (!res.ok || !res.body) return null;
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done || signal?.aborted) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          if (data.id) {
+            return { gameId: data.id, color: (data.color || 'white') as 'white' | 'black' };
+          }
+        } catch {}
+      }
+    }
+    return null;
   } catch (err: unknown) {
     if ((err as Error)?.name !== 'AbortError') {
       console.error('Seek error:', err);
     }
-    return false;
+    return null;
   }
 }
 
