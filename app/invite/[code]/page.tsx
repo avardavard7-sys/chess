@@ -43,8 +43,15 @@ function InviteContent({ code }: { code: string }) {
     await acceptGameInvite(invite.id, userId);
 
     const channel = supabase.channel(`invite:${invite.id}`);
-    await channel.send({ type: 'broadcast', event: 'ACCEPTED', payload: { guest_id: userId } });
-    channel.unsubscribe();
+    await new Promise<void>((resolve) => {
+      channel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          channel.send({ type: 'broadcast', event: 'ACCEPTED', payload: { guest_id: userId } });
+          resolve();
+        }
+      });
+    });
+    setTimeout(() => channel.unsubscribe(), 1000);
 
     router.push(`/game/medium?mode=friend&session=${invite.id}&color=black`);
   };

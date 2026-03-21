@@ -30,7 +30,7 @@ export default function FriendsPage() {
   const [tab, setTab] = useState<'friends' | 'requests' | 'search'>('friends');
 
   const [friends, setFriends] = useState<FriendData[]>([]);
-  const [requests, setRequests] = useState<{ id: string; user_id: string; user: unknown }[]>([]);
+  const [requests, setRequests] = useState<{ id: string; user_id: string; user: { id: string; username: string; avatar_url: string; elo_rating: number } }[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
   const [searching, setSearching] = useState(false);
@@ -248,17 +248,15 @@ export default function FriendsPage() {
                   <p className="text-white/40 text-sm">Нет входящих запросов</p>
                 </div>
               ) : (
-                requests.map((r) => {
-                  const u = (Array.isArray(r.user) ? r.user[0] : r.user) as Profile | undefined;
-                  return (
+                requests.map((r) => (
                   <motion.div key={r.id} className="glass p-4 rounded-xl flex items-center gap-3" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                     <div className="w-11 h-11 rounded-full overflow-hidden bg-yellow-500/20 flex items-center justify-center text-lg font-bold text-yellow-400 flex-shrink-0">
-                      {u?.avatar_url ? (
-                        <Image src={u.avatar_url} alt={u.username} width={44} height={44} className="w-full h-full object-cover" />
-                      ) : u?.username?.[0]?.toUpperCase()}
+                      {r.user?.avatar_url ? (
+                        <Image src={r.user.avatar_url} alt={r.user.username} width={44} height={44} className="w-full h-full object-cover" />
+                      ) : r.user?.username?.[0]?.toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-semibold truncate">{u?.username}</div>
+                      <div className="font-semibold truncate">{r.user?.username}</div>
                       <div className="text-xs text-white/40">Хочет добавить вас в друзья</div>
                     </div>
                     <div className="flex gap-2 flex-shrink-0">
@@ -277,8 +275,7 @@ export default function FriendsPage() {
                       </motion.button>
                     </div>
                   </motion.div>
-                  );
-                })
+                ))
               )}
             </div>
           )}
@@ -292,7 +289,8 @@ export default function FriendsPage() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                   placeholder="Введите ник игрока..."
-                  className="flex-1 bg-white/8 rounded-xl px-4 py-3 text-white placeholder-white/30 border border-white/15 focus:border-yellow-400/50 focus:outline-none"
+                  className="flex-1 rounded-xl px-4 py-3 text-white placeholder-white/30 border border-white/15 focus:border-yellow-400/50 focus:outline-none"
+                  style={{ background: 'rgba(255,255,255,0.08)' }}
                 />
                 <motion.button
                   onClick={handleSearch}

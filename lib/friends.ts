@@ -30,28 +30,59 @@ export async function removeFriend(friendshipId: string) {
   return supabase.from('friendships').delete().eq('id', friendshipId);
 }
 
+async function fetchProfiles(ids: string[]) {
+  if (ids.length === 0) return [];
+  const { data } = await supabase
+    .from('profiles')
+    .select('id, username, avatar_url, elo_rating, rank')
+    .in('id', ids);
+  return data || [];
+}
+
 export async function getFriends(userId: string) {
   const { data } = await supabase
     .from('friendships')
-    .select('id, user_id, friend_id, created_at, user:profiles!friendships_user_id_fkey(id, username, avatar_url, elo_rating, rank), friend:profiles!friendships_friend_id_fkey(id, username, avatar_url, elo_rating, rank)')
+    .select('id, user_id, friend_id')
     .or(`user_id.eq.${userId},friend_id.eq.${userId}`)
     .eq('status', 'accepted');
-  if (!data) return [];
+  if (!data || data.length === 0) return [];
+
+  const friendIds = data.map((f) => f.user_id === userId ? f.friend_id : f.user_id);
+  const profiles = await fetchProfiles(friendIds);
+  const profileMap = new Map(profiles.map((p) => [p.id, p]));
+
   return data.map((f) => {
-    const isMe = f.user_id === userId;
-    const raw = isMe ? f.friend : f.user;
-    const profile = Array.isArray(raw) ? raw[0] : raw;
-    return { friendshipId: f.id, ...(profile as { id: string; username: string; avatar_url: string; elo_rating: number; rank: string }) };
+    const friendId = f.user_id === userId ? f.friend_id : f.user_id;
+    const profile = profileMap.get(friendId);
+    return {
+      friendshipId: f.id,
+      id: friendId,
+      username: profile?.username || 'Unknown',
+      avatar_url: profile?.avatar_url || '',
+      elo_rating: profile?.elo_rating || 0,
+      rank: profile?.rank || '',
+    };
   });
 }
 
 export async function getFriendRequests(userId: string) {
   const { data } = await supabase
     .from('friendships')
-    .select('id, user_id, created_at, user:profiles!friendships_user_id_fkey(id, username, avatar_url, elo_rating)')
+    .select('id, user_id, created_at')
     .eq('friend_id', userId)
     .eq('status', 'pending');
-  return data || [];
+  if (!data || data.length === 0) return [];
+
+  const senderIds = data.map((r) => r.user_id);
+  const profiles = await fetchProfiles(senderIds);
+  const profileMap = new Map(profiles.map((p) => [p.id, p]));
+
+  return data.map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    created_at: r.created_at,
+    user: profileMap.get(r.user_id) || { id: r.user_id, username: 'Unknown', avatar_url: '', elo_rating: 0 },
+  }));
 }
 
 export async function getFriendshipStatus(userId: string, friendId: string) {
@@ -59,7 +90,7 @@ export async function getFriendshipStatus(userId: string, friendId: string) {
     .from('friendships')
     .select('id, status, user_id')
     .or(`and(user_id.eq.${userId},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${userId})`)
-    .single();
+    .maybeSingle();
   return data;
 }
 
@@ -119,11 +150,19 @@ export async function createGameInvite(hostId: string, guestId?: string) {
 export async function getInviteByCode(code: string) {
   const { data } = await supabase
     .from('game_invites')
-    .select('*, host:profiles!game_invites_host_id_fkey(username, avatar_url, elo_rating)')
+    .select('*')
     .eq('invite_code', code.toUpperCase())
     .eq('status', 'waiting')
+    .maybeSingle();
+  if (!data) return null;
+
+  const { data: hostProfile } = await supabase
+    .from('profiles')
+    .select('username, avatar_url, elo_rating')
+    .eq('id', data.host_id)
     .single();
-  return data;
+
+  return { ...data, host: hostProfile };
 }
 
 export async function acceptGameInvite(inviteId: string, guestId: string) {
@@ -140,7 +179,7 @@ export async function cancelGameInvite(inviteId: string) {
 export async function getPendingInvitesForUser(userId: string) {
   const { data } = await supabase
     .from('game_invites')
-    .select('*, host:profiles!game_invites_host_id_fkey(username, avatar_url, elo_rating)')
+    .select('*')
     .eq('guest_id', userId)
     .eq('status', 'waiting');
   return data || [];
