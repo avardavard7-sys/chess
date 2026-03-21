@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, use, Suspense } from 'react';
+import { useState, use, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import Header from '@/components/Header';
 import ChessBoard from '@/components/ChessBoard';
 import KidsBackground from '@/components/KidsBackground';
 import GameOverModal from '@/components/GameOverModal';
 import OnlineChat from '@/components/OnlineChat';
+import { supabase } from '@/lib/supabase';
 import type { Difficulty } from '@/store/gameStore';
 
 interface GamePageProps {
@@ -40,9 +41,43 @@ function GameContent({ rawMode }: { rawMode: string }) {
     eloChange: number;
   } | null>(null);
   const [gameKey, setGameKey] = useState(0);
+  const [rematchRequest, setRematchRequest] = useState(false);
+  const [rematchWaiting, setRematchWaiting] = useState(false);
+  const rematchChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const isKids = rawMode === 'kids';
   const diffInfo = difficultyLabels[rawMode] || difficultyLabels.medium;
+
+  useEffect(() => {
+    if (gameMode !== 'friend' || !sessionId) return;
+    const ch = supabase.channel(`rematch:${sessionId}`);
+    rematchChannelRef.current = ch;
+    ch.on('broadcast', { event: 'REMATCH_REQ' }, () => {
+      setRematchRequest(true);
+    }).on('broadcast', { event: 'REMATCH_OK' }, () => {
+      setRematchWaiting(false);
+      setGameOverData(null);
+      setGameKey((k) => k + 1);
+    }).subscribe();
+    return () => { ch.unsubscribe(); };
+  }, [gameMode, sessionId]);
+
+  const handlePlayAgain = () => {
+    if (gameMode === 'friend' && sessionId && rematchChannelRef.current) {
+      setRematchWaiting(true);
+      rematchChannelRef.current.send({ type: 'broadcast', event: 'REMATCH_REQ', payload: {} });
+    } else {
+      setGameOverData(null);
+      setGameKey((k) => k + 1);
+    }
+  };
+
+  const handleAcceptRematch = () => {
+    setRematchRequest(false);
+    setGameOverData(null);
+    setGameKey((k) => k + 1);
+    rematchChannelRef.current?.send({ type: 'broadcast', event: 'REMATCH_OK', payload: {} });
+  };
 
   return (
     <div className="relative min-h-screen">
@@ -107,8 +142,48 @@ function GameContent({ rawMode }: { rawMode: string }) {
         isOpen={!!gameOverData}
         result={gameOverData?.result ?? null}
         eloChange={gameOverData?.eloChange ?? null}
-        onPlayAgain={() => { setGameOverData(null); setGameKey((k) => k + 1); }}
+        onPlayAgain={handlePlayAgain}
       />
+
+      {/* Rematch waiting */}
+      <AnimatePresence>
+        {rematchWaiting && (
+          <motion.div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 glass px-6 py-3 rounded-xl text-sm text-yellow-400"
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}>
+            Ожидание ответа соперника...
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Rematch request from opponent */}
+      <AnimatePresence>
+        {rematchRequest && (
+          <motion.div className="fixed inset-0 z-50 flex items-center justify-center"
+            style={{ backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div className="glass p-8 rounded-2xl text-center max-w-sm mx-4"
+              style={{ border: '1px solid rgba(245,158,11,0.3)' }}
+              initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}>
+              <div className="text-5xl mb-4">♞</div>
+              <h3 className="text-xl font-bold mb-2" style={{ fontFamily: "'Playfair Display', serif", color: '#f59e0b' }}>Реванш!</h3>
+              <p className="text-white/50 text-sm mb-6">Соперник предлагает сыграть ещё раз</p>
+              <div className="flex gap-3">
+                <motion.button onClick={handleAcceptRematch}
+                  className="flex-1 py-3 rounded-xl font-semibold text-black"
+                  style={{ background: 'linear-gradient(135deg, #4ade80, #22c55e)' }}
+                  whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
+                  Принять
+                </motion.button>
+                <motion.button onClick={() => setRematchRequest(false)}
+                  className="flex-1 py-3 rounded-xl border border-white/15 text-white/60"
+                  whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
+                  Отклонить
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

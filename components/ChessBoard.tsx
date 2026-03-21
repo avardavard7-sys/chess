@@ -83,7 +83,9 @@ export default function ChessBoard({
 
   useEffect(() => {
     if ((mode !== 'online' && mode !== 'friend') || !sessionId) return;
-    const channel = supabase.channel(`game:${sessionId}`);
+    const channel = supabase.channel(`game:${sessionId}`, {
+      config: { broadcast: { self: false }, presence: { key: playerColor } },
+    });
     channelRef.current = channel;
     channel
       .on('broadcast', { event: 'MOVE' }, ({ payload }) => {
@@ -100,7 +102,12 @@ export default function ChessBoard({
         setGameOver({ status: 'resigned', winner: playerColor });
         handleGameEnd('win');
       })
-      .subscribe();
+      .on('presence', { event: 'sync' }, () => {})
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ color: playerColor, online: true });
+        }
+      });
     return () => { channel.unsubscribe(); };
   }, [mode, sessionId]);
 
