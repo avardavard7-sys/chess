@@ -1,0 +1,450 @@
+'use client';
+
+import { useEffect, useState, Suspense } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import Image from 'next/image';
+import { useSearchParams } from 'next/navigation';
+import Header from '@/components/Header';
+import FriendChat from '@/components/FriendChat';
+import GameInviteModal from '@/components/GameInviteModal';
+import { supabase } from '@/lib/supabase';
+import { useTranslation } from '@/lib/i18n';
+import {
+  searchUsers, sendFriendRequest, acceptFriendRequest, declineFriendRequest,
+  getFriends, getFriendRequests, getFriendshipStatus, createGameInvite, getUnreadByFriend,
+} from '@/lib/friends';
+
+interface Profile {
+  id: string;
+  username: string;
+  avatar_url: string;
+  elo_rating: number;
+  rank?: string;
+}
+
+interface FriendData extends Profile {
+  friendshipId: string;
+}
+
+export default function FriendsPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-5xl animate-spin">♞</div>
+      </div>
+    }>
+      <FriendsContent />
+    </Suspense>
+  );
+}
+
+function FriendsContent() {
+  const searchParams = useSearchParams();
+  const { t } = useTranslation();
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<'friends' | 'requests' | 'search'>('friends');
+
+  const [friends, setFriends] = useState<FriendData[]>([]);
+  const [requests, setRequests] = useState<{ id: string; user_id: string; user: { id: string; username: string; avatar_url: string; elo_rating: number } }[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Profile[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [sentRequests, setSentRequests] = useState<Set<string>>(new Set());
+
+  const [chatFriend, setChatFriend] = useState<Profile | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const [lastMsgTime, setLastMsgTime] = useState<Record<string, number>>({});
+
+  // Авто-открытие модалки приглашения при параметре invite=true
+  useEffect(() => {
+    if (searchParams.get('invite') === 'true' && userId) {
+      setInviteOpen(true);
+    }
+  }, [searchParams, userId]);
+
+  useEffect(() => {
+    let currentUid: string | null = null;
+    let pollInterval: NodeJS.Timeout | null = null;
+    let msgChannel: any = null;
+
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        currentUid = session.user.id;
+        setUserId(currentUid);
+        await refreshData(currentUid);
+
+        // Realtime — обновляем когда приходит новое сообщение
+        msgChannel = supabase.channel('friends-messages')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+            const msg = payload.new as any;
+            if (msg.receiver_id === currentUid || msg.sender_id === currentUid) {
+              if (currentUid) refreshData(currentUid);
+            }
+          })
+          .subscribe();
+
+        // Polling каждые 10 сек как fallback
+        pollInterval = setInterval(() => { if (currentUid) refreshData(currentUid); }, 10000);
+      }
+      setLoading(false);
+    };
+    init();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setUserId(null);
+      } else if (event === 'SIGNED_IN' && session?.user) {
+        currentUid = session.user.id;
+        setUserId(currentUid);
+        refreshData(currentUid);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+      if (pollInterval) clearInterval(pollInterval);
+      if (msgChannel) supabase.removeChannel(msgChannel);
+    };
+  }, []);
+
+  const refreshData = async (uid: string) => {
+    const [friendsData, requestsData, unread] = await Promise.all([
+      getFriends(uid),
+      getFriendRequests(uid),
+      getUnreadByFriend(uid),
+    ]);
+    setFriends(friendsData as FriendData[]);
+    setRequests(requestsData as typeof requests);
+    setUnreadCounts(unread);
+
+    // Загружаем время последнего сообщения от каждого друга
+    const friendIds = (friendsData as FriendData[]).map(f => f.id);
+    if (friendIds.length > 0) {
+      const { data: msgs } = await supabase.from('messages')
+        .select('sender_id, receiver_id, created_at')
+        .or(`sender_id.eq.${uid},receiver_id.eq.${uid}`)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (msgs) {
+        const times: Record<string, number> = {};
+        msgs.forEach(m => {
+          const friendId = m.sender_id === uid ? m.receiver_id : m.sender_id;
+          if (!times[friendId]) times[friendId] = new Date(m.created_at).getTime();
+        });
+        setLastMsgTime(times);
+      }
+    }
+  };
+
+  const handleSearch = async () => {
+    if (!userId || searchQuery.trim().length < 2) return;
+    setSearching(true);
+    const results = await searchUsers(searchQuery.trim(), userId);
+    setSearchResults(results as Profile[]);
+    setSearching(false);
+  };
+
+  const handleAddFriend = async (friendId: string) => {
+    if (!userId) return;
+    const existing = await getFriendshipStatus(userId, friendId);
+    if (existing) return;
+    await sendFriendRequest(userId, friendId);
+    setSentRequests((prev) => new Set(prev).add(friendId));
+  };
+
+  const handleAccept = async (requestId: string) => {
+    if (!userId) return;
+    await acceptFriendRequest(requestId);
+    await refreshData(userId);
+  };
+
+  const handleDecline = async (requestId: string) => {
+    if (!userId) return;
+    await declineFriendRequest(requestId);
+    await refreshData(userId);
+  };
+
+  const [inviteSending, setInviteSending] = useState<string | null>(null);
+  const [inviteSentTo, setInviteSentTo] = useState<string | null>(null);
+
+  const handleInviteFriend = async (friendId: string) => {
+    if (!userId || inviteSending || inviteSentTo) return;
+    setInviteSending(friendId);
+    const { data } = await createGameInvite(userId, friendId, 5, 0);
+    if (data) {
+      const channel = supabase.channel(`dm:${[userId, friendId].sort().join(':')}`);
+      await channel.send({
+        type: 'broadcast',
+        event: 'GAME_INVITE',
+        payload: { from: userId, invite_code: data.invite_code },
+      });
+      channel.unsubscribe();
+
+      setInviteSending(null);
+      setInviteSentTo(friendId);
+
+      const inviteChannel = supabase.channel(`invite:${data.id}`);
+      inviteChannel
+        .on('broadcast', { event: 'ACCEPTED' }, () => {
+          window.location.href = `/game/friend?mode=friend&session=${data.id}&color=white&tc_min=${data.tc_min ?? 5}&tc_inc=${data.tc_inc ?? 0}`;
+        })
+        .subscribe();
+    } else {
+      setInviteSending(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <motion.div className="text-5xl" animate={{ rotate: 360 }} transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}>♞</motion.div>
+      </div>
+    );
+  }
+
+  if (!userId) {
+    return (
+      <div className="min-h-screen">
+        <Header />
+        <div className="flex items-center justify-center min-h-screen pt-24 px-4">
+          <motion.div className="glass p-10 rounded-2xl text-center max-w-md w-full" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+            <div className="text-6xl mb-5">👥</div>
+            <h2 className="text-3xl font-bold mb-3" style={{ fontFamily: "'Playfair Display', serif", color: '#f59e0b' }}>{t('friends_title')}</h2>
+            <p className="text-white/60 mb-8">{t("sign_in_required")}</p>
+            <motion.button
+              onClick={() => import('@/lib/supabase').then((m) => m.signInWithGoogle())}
+              className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-semibold text-black"
+              style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+              whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
+              Войти через Google
+            </motion.button>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
+
+  if (chatFriend) {
+    return (
+      <div className="min-h-screen">
+        <Header />
+        <main className="pt-24 pb-12 px-4">
+          <div className="max-w-2xl mx-auto">
+            <div className="glass rounded-2xl overflow-hidden" style={{ height: 'calc(100vh - 140px)' }}>
+              <FriendChat
+                userId={userId}
+                friend={chatFriend}
+                onClose={() => { setChatFriend(null); if (userId) refreshData(userId); }}
+                onInvite={handleInviteFriend}
+              />
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen">
+      <Header />
+      <main className="pt-24 pb-12 px-4">
+        <div className="max-w-2xl mx-auto">
+          <motion.div className="flex items-center justify-between mb-6" initial={{ opacity: 0, y: -15 }} animate={{ opacity: 1, y: 0 }}>
+            <h1 className="text-3xl font-bold" style={{ fontFamily: "'Playfair Display', serif", color: '#f59e0b' }}>{t('friends_title')}</h1>
+            <motion.button
+              onClick={() => setInviteOpen(true)}
+              className="px-4 py-2 rounded-xl text-sm font-semibold text-black"
+              style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+            >
+              Пригласить в игру
+            </motion.button>
+          </motion.div>
+
+          {/* Tabs */}
+          <div className="flex gap-1 mb-6 p-1 rounded-xl" style={{ background: 'rgba(255,255,255,0.04)' }}>
+            {([
+              { id: 'friends' as const, label: t('friends_my'), count: friends.length },
+              { id: 'requests' as const, label: t('friends_requests'), count: requests.length },
+              { id: 'search' as const, label: t('search'), count: 0 },
+            ]).map((tabItem) => (
+              <button
+                key={tabItem.id}
+                onClick={() => setTab(tabItem.id)}
+                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${tab === tabItem.id ? 'bg-yellow-500/20 text-yellow-400' : 'text-white/40 hover:text-white/60'}`}
+              >
+                {tabItem.label}
+                {tabItem.count > 0 && <span className="ml-1.5 text-xs opacity-60">({tabItem.count})</span>}
+              </button>
+            ))}
+          </div>
+
+          {/* Friends list */}
+          {tab === 'friends' && (
+            <div className="space-y-2">
+              {friends.length === 0 ? (
+                <div className="glass p-8 rounded-2xl text-center">
+                  <div className="text-4xl mb-3">👥</div>
+                  <p className="text-white/40 text-sm">{t('friends_none')}</p>
+                </div>
+              ) : (
+                [...friends].sort((a, b) => {
+                  // Сначала непрочитанные
+                  const aUnread = unreadCounts[a.id] || 0;
+                  const bUnread = unreadCounts[b.id] || 0;
+                  if (aUnread > 0 && bUnread === 0) return -1;
+                  if (bUnread > 0 && aUnread === 0) return 1;
+                  // Потом по последнему сообщению
+                  const aTime = lastMsgTime[a.id] || 0;
+                  const bTime = lastMsgTime[b.id] || 0;
+                  return bTime - aTime;
+                }).map((f) => (
+                  <motion.div key={f.friendshipId} className={`glass p-4 rounded-xl flex items-center gap-3 ${unreadCounts[f.id] ? 'ring-1 ring-yellow-400/30' : ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <div className="relative w-11 h-11 flex-shrink-0">
+                      <div className="w-11 h-11 rounded-full overflow-hidden border border-yellow-500/30">
+                        {f.avatar_url ? (
+                          <Image src={f.avatar_url} alt={f.username} width={44} height={44} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full bg-yellow-500/20 flex items-center justify-center text-lg font-bold text-yellow-400">
+                            {f.username[0]?.toUpperCase()}
+                          </div>
+                        )}
+                      </div>
+                      {unreadCounts[f.id] > 0 && (
+                        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center border-2 border-[#1e1b4b]">
+                          {unreadCounts[f.id] > 9 ? '9+' : unreadCounts[f.id]}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold truncate">{f.username}</div>
+                      <div className="text-xs text-yellow-400">ELO {f.elo_rating}</div>
+                    </div>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <motion.button
+                        onClick={() => setChatFriend(f)}
+                        className="px-3 py-1.5 rounded-lg text-xs border border-white/15 text-white/60 hover:text-white/90 hover:border-white/30 transition-all"
+                        whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                      >
+                        Написать
+                      </motion.button>
+                      <motion.button
+                        onClick={() => handleInviteFriend(f.id)}
+                        disabled={!!inviteSending || !!inviteSentTo}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 ${inviteSentTo === f.id ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'text-black'}`}
+                        style={inviteSentTo === f.id ? {} : { background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+                        whileHover={!inviteSentTo ? { scale: 1.05 } : {}} whileTap={!inviteSentTo ? { scale: 0.95 } : {}}
+                      >
+                        {inviteSending === f.id ? '⏳ Отправка...' : inviteSentTo === f.id ? '✅ Ждём ответа...' : 'Играть'}
+                      </motion.button>
+                    </div>
+                  </motion.div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Friend requests */}
+          {tab === 'requests' && (
+            <div className="space-y-2">
+              {requests.length === 0 ? (
+                <div className="glass p-8 rounded-2xl text-center">
+                  <p className="text-white/40 text-sm">{t('friends_none')}</p>
+                </div>
+              ) : (
+                requests.map((r) => (
+                  <motion.div key={r.id} className="glass p-4 rounded-xl flex items-center gap-3" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <div className="w-11 h-11 rounded-full overflow-hidden bg-yellow-500/20 flex items-center justify-center text-lg font-bold text-yellow-400 flex-shrink-0">
+                      {r.user?.avatar_url ? (
+                        <Image src={r.user.avatar_url} alt={r.user.username} width={44} height={44} className="w-full h-full object-cover" />
+                      ) : r.user?.username?.[0]?.toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold truncate">{r.user?.username}</div>
+                      <div className="text-xs text-white/40">{t('wants_add_friend')}</div>
+                    </div>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <motion.button onClick={() => handleAccept(r.id)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold text-black"
+                        style={{ background: 'linear-gradient(135deg, #4ade80, #22c55e)' }}
+                        whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                      >
+                        Принять
+                      </motion.button>
+                      <motion.button onClick={() => handleDecline(r.id)}
+                        className="px-3 py-1.5 rounded-lg text-xs border border-red-500/30 text-red-400 hover:bg-red-500/10"
+                        whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                      >
+                        Отклонить
+                      </motion.button>
+                    </div>
+                  </motion.div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Search */}
+          {tab === 'search' && (
+            <div>
+              <div className="flex gap-2 mb-4">
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                  placeholder="Введите ник игрока..."
+                  className="flex-1 rounded-xl px-4 py-3 text-white placeholder-white/30 border border-white/15 focus:border-yellow-400/50 focus:outline-none"
+                  style={{ background: 'rgba(255,255,255,0.08)' }}
+                />
+                <motion.button
+                  onClick={handleSearch}
+                  disabled={searching || searchQuery.trim().length < 2}
+                  className="px-5 py-3 rounded-xl font-semibold text-black disabled:opacity-40"
+                  style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+                  whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                >
+                  {searching ? '...' : 'Найти'}
+                </motion.button>
+              </div>
+
+              <div className="space-y-2">
+                {searchResults.map((u) => (
+                  <motion.div key={u.id} className="glass p-4 rounded-xl flex items-center gap-3" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                    <div className="w-11 h-11 rounded-full overflow-hidden bg-yellow-500/20 flex items-center justify-center text-lg font-bold text-yellow-400 flex-shrink-0">
+                      {u.avatar_url ? (
+                        <Image src={u.avatar_url} alt={u.username} width={44} height={44} className="w-full h-full object-cover" />
+                      ) : u.username[0]?.toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold truncate">{u.username}</div>
+                      <div className="text-xs text-yellow-400">ELO {u.elo_rating}</div>
+                    </div>
+                    <motion.button
+                      onClick={() => handleAddFriend(u.id)}
+                      disabled={sentRequests.has(u.id)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold text-black disabled:opacity-50 flex-shrink-0"
+                      style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+                      whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                    >
+                      {sentRequests.has(u.id) ? 'Отправлено' : 'Добавить'}
+                    </motion.button>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      <GameInviteModal
+        userId={userId}
+        friends={friends}
+        isOpen={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+      />
+    </div>
+  );
+}
