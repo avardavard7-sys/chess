@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, use } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { isAcceptedMove } from '@/lib/puzzleAccept';
 import { Chessboard } from 'react-chessboard';
 import { Chess, Square } from 'chess.js';
 import { useRouter } from 'next/navigation';
@@ -156,17 +157,21 @@ export default function CoursePage({ params }: { params: Promise<{ courseId: str
 
   const checkPlayerMove = useCallback((from: string, to: string, promotion?: string) => {
     if (!currentPuzzle || state !== 'thinking') return false;
+    // ход принимается только в очередь игрока (нечётный шаг): пока соперник «думает»
+    // 0.5–0.6 с, ход игрока раньше сверялся с ходом соперника и объявлялся неверным
+    if (moveStep % 2 === 0 || chessRef.current.turn() !== playerColor[0]) return false;
     const exp = currentPuzzle.moves[moveStep];
     if (!exp) return false;
     const pUci = from + to + (promotion || '');
-    if (pUci === exp) {
+    const verdict = isAcceptedMove(chessRef.current.fen(), pUci, exp);
+    if (verdict) {
       try {
-        const m = chessRef.current.move({ from: from as Square, to: to as Square, promotion: (promotion || undefined) as 'q' | 'r' | 'b' | 'n' | undefined });
+        const m = chessRef.current.move({ from: from as Square, to: to as Square, promotion: (promotion || (verdict === 'solution' ? exp[4] : undefined) || undefined) as 'q' | 'r' | 'b' | 'n' | undefined });
         if (!m) return false;
       } catch { return false; }
       setFen(chessRef.current.fen()); setCustomArrows([]); setShowHintArrow(false);
       setLastMoveSquares({ [from]: { backgroundColor: 'rgba(74,222,128,0.3)' }, [to]: { backgroundColor: 'rgba(74,222,128,0.5)' } });
-      const ns = moveStep + 1;
+      const ns = verdict === 'mate' ? currentPuzzle.moves.length : moveStep + 1;
       if (ns >= currentPuzzle.moves.length) {
         setState('correct');
         if (!solvedSet.has(currentPuzzle.id)) { const s = new Set(solvedSet); s.add(currentPuzzle.id); setSolvedSet(s); setScore(s.size); saveProgress(s);
@@ -176,7 +181,7 @@ export default function CoursePage({ params }: { params: Promise<{ courseId: str
       } else { setMoveStep(ns); makeComputerMove(currentPuzzle, ns); playSound('move'); }
       return true;
     } else { setState('wrong'); triggerShake(); playSound('wrong'); setFen(chessRef.current.fen()); setTimeout(() => setState('thinking'), 1200); return false; }
-  }, [currentPuzzle, moveStep, state, solvedSet, saveProgress, makeComputerMove]);
+  }, [currentPuzzle, moveStep, state, solvedSet, saveProgress, makeComputerMove, playerColor]);
 
   const onPieceDrop = useCallback((s: Square, t: Square, piece: string) => {
     if (state !== 'thinking') return false;

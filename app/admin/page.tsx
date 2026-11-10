@@ -464,12 +464,15 @@ export default function AdminPage() {
                             <span className="flex-1 text-white/70 truncate">{p.profiles?.username || '?'}</span>
                             <div className="flex items-center gap-1">
                               <span className="text-xs text-white/30">ELO:</span>
-                              <input type="number" value={p.tournament_rating || 0}
-                                onChange={async (e) => {
-                                  const val = parseInt(e.target.value) || 0;
+                              <input type="number" key={`${p.id}-${p.tournament_rating || 0}`} defaultValue={p.tournament_rating || 0}
+                                onBlur={async (e) => {
+                                  const val = parseInt(e.target.value, 10);
+                                  if (Number.isNaN(val) || val < 0) { e.target.value = String(p.tournament_rating || 0); return; }
+                                  if (val === (p.tournament_rating || 0)) return;
                                   await supabase.from('tournament_participants').update({ tournament_rating: val }).eq('id', p.id);
                                   setParticipants(prev => prev.map(x => x.id === p.id ? { ...x, tournament_rating: val } : x));
                                 }}
+                                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                                 className="w-16 px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-yellow-400 text-xs text-center font-bold"
                               />
                             </div>
@@ -505,21 +508,18 @@ export default function AdminPage() {
                       <div className="grid grid-cols-3 gap-3">
                         <div>
                           <label className="text-xs text-green-400 block mb-1">{t('win_plus')}</label>
-                          <input type="number" value={cs.win_coins}
-                            onChange={e => setCoinSettings(prev => prev.map(p => p.mode === cs.mode ? { ...p, win_coins: parseInt(e.target.value) || 0 } : p))}
-                            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm text-center" />
+                          <CoinStepper value={cs.win_coins}
+                            onChange={n => setCoinSettings(prev => prev.map(p => p.mode === cs.mode ? { ...p, win_coins: n } : p))} />
                         </div>
                         <div>
                           <label className="text-xs text-red-400 block mb-1">{t('loss_minus')}</label>
-                          <input type="number" value={cs.loss_coins}
-                            onChange={e => setCoinSettings(prev => prev.map(p => p.mode === cs.mode ? { ...p, loss_coins: parseInt(e.target.value) || 0 } : p))}
-                            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm text-center" />
+                          <CoinStepper value={cs.loss_coins}
+                            onChange={n => setCoinSettings(prev => prev.map(p => p.mode === cs.mode ? { ...p, loss_coins: n } : p))} />
                         </div>
                         <div>
                           <label className="text-xs text-white/40 block mb-1">{t('draw_coins')}</label>
-                          <input type="number" value={cs.draw_coins}
-                            onChange={e => setCoinSettings(prev => prev.map(p => p.mode === cs.mode ? { ...p, draw_coins: parseInt(e.target.value) || 0 } : p))}
-                            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm text-center" />
+                          <CoinStepper value={cs.draw_coins}
+                            onChange={n => setCoinSettings(prev => prev.map(p => p.mode === cs.mode ? { ...p, draw_coins: n } : p))} />
                         </div>
                       </div>
                     </div>
@@ -1319,6 +1319,20 @@ export default function AdminPage() {
           )}
         </div>
       </main>
+    </div>
+  );
+}
+
+function CoinStepper({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const set = (n: number) => onChange(Math.max(-100, Math.min(100, n)));
+  const color = value > 0 ? 'text-green-400' : value < 0 ? 'text-red-400' : 'text-white';
+  return (
+    <div className="flex items-center justify-between gap-1 rounded-lg bg-white/5 border border-white/10 p-1">
+      <button type="button" onClick={() => set(value - 1)} aria-label="минус"
+        className="w-8 h-8 rounded-md bg-white/10 hover:bg-white/20 text-white text-lg leading-none">−</button>
+      <span className={`min-w-[2.5rem] text-center text-sm font-bold ${color}`}>{value > 0 ? `+${value}` : value}</span>
+      <button type="button" onClick={() => set(value + 1)} aria-label="плюс"
+        className="w-8 h-8 rounded-md bg-white/10 hover:bg-white/20 text-white text-lg leading-none">+</button>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Chessboard } from 'react-chessboard';
 import { Chess, Square } from 'chess.js';
+import { isAcceptedMove } from '@/lib/puzzleAccept';
 import { useBoardTheme } from '@/lib/boardThemes';
 import { useTranslation } from '@/lib/i18n';
 
@@ -55,16 +56,18 @@ export default function DailyPuzzle({ compact = false }: DailyPuzzleProps) {
 
   const onDrop = (from: Square, to: Square) => {
     if (state !== 'thinking' || !puzzle) return false;
+    if (moveStep % 2 === 0 || chessRef.current.turn() !== playerColor[0]) return false;
     const expected = puzzle.moves[moveStep];
     if (!expected) return false;
     const uci = from + to;
-    if (uci === expected.slice(0, 4)) {
+    const verdict = isAcceptedMove(chessRef.current.fen(), uci, expected.slice(0, 4) === uci ? uci : expected);
+    if (verdict) {
       const chess = chessRef.current;
-      const promo = expected.length === 5 ? expected[4] : undefined;
+      const promo = verdict === 'solution' && expected.length === 5 ? expected[4] : undefined;
       try {
-        chess.move({ from, to, promotion: promo as any });
+        chess.move({ from, to, promotion: (promo || 'q') as any });
         setFen(chess.fen());
-        const next = moveStep + 1;
+        const next = verdict === 'mate' ? puzzle.moves.length : moveStep + 1;
         if (next >= puzzle.moves.length) {
           setState('correct');
         } else {

@@ -70,13 +70,11 @@ export default function TrainerPage() {
     let trainerEntry = (await supabase.from('school_trainers').select('id, name, profile_id').eq('profile_id', uid).maybeSingle()).data;
 
     if (!trainerEntry) {
-      const myProfile = (await supabase.from('profiles').select('username, full_name').eq('id', uid).maybeSingle()).data;
+      const myProfile = (await supabase.from('profiles').select('username').eq('id', uid).maybeSingle()).data;
       if (myProfile) {
         const allTrainers = (await supabase.from('school_trainers').select('id, name, profile_id')).data || [];
         trainerEntry = allTrainers.find((tr: any) =>
           tr.name === myProfile.username ||
-          tr.name === myProfile.full_name ||
-          (myProfile.full_name && tr.name && tr.name.toLowerCase().includes(myProfile.full_name.toLowerCase())) ||
           (myProfile.username && tr.name && tr.name.toLowerCase().includes(myProfile.username.toLowerCase()))
         ) || null;
 

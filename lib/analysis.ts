@@ -52,9 +52,13 @@ function classifyMove(
   winProbBefore: number,
   winProbAfter: number,
   isBestMove: boolean,
-  isSacrifice: boolean
+  isSacrifice: boolean,
+  extra?: { hadForcedMate?: boolean; keepsMate?: boolean; isBook?: boolean }
 ): MoveClassification {
   const winLoss = winProbBefore - winProbAfter;
+
+  if (extra?.hadForcedMate && !extra.keepsMate && !isBestMove && winLoss >= 2) return 'miss';
+  if (extra?.isBook && winLoss < 5) return 'book';
 
   if (isBestMove && isSacrifice && winLoss <= 2) return 'brilliant';
   if (isBestMove) return 'best';
@@ -65,25 +69,91 @@ function classifyMove(
   return 'blunder';
 }
 
-let analysisWorker: Worker | null = null;
+type AnalysisEngine = { worker: Worker; kind: 'sf18' | 'legacy' };
+let enginePromise: Promise<AnalysisEngine> | null = null;
+let liveWorker: Worker | null = null;
 
-function getAnalysisWorker(): Worker {
-  if (!analysisWorker) {
-    analysisWorker = new Worker('/stockfish/stockfish.js');
-    analysisWorker.postMessage('uci');
-    analysisWorker.postMessage('setoption name Threads value 1');
-    analysisWorker.postMessage('setoption name Hash value 256');
-    analysisWorker.postMessage('setoption name MultiPV value 1');
-    analysisWorker.postMessage('ucinewgame');
-  }
-  return analysisWorker;
+const SF18_URL = '/stockfish/sf18.js#/stockfish/sf18.wasm';
+const LEGACY_URL = '/stockfish/stockfish.js';
+const BOOT_TIMEOUT_MS = 20000;
+export const ANALYSIS_DEPTH = 12;
+export const ANALYSIS_MOVETIME_MS = 300;
+export const VERIFY_DEPTH = 16;
+export const VERIFY_MOVETIME_MS = 2500;
+const VERIFY_LOSS = 10;
+
+function bootEngine(url: string): Promise<Worker> {
+  return new Promise((resolve, reject) => {
+    let w: Worker;
+    try {
+      w = new Worker(url);
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try { w.terminate(); } catch {}
+      reject(new Error('engine boot timeout'));
+    }, BOOT_TIMEOUT_MS);
+    const onMsg = (ev: MessageEvent) => {
+      const line = typeof ev.data === 'string' ? ev.data : '';
+      if (!done && (line.includes('uciok') || line.includes('readyok'))) {
+        done = true;
+        clearTimeout(timer);
+        w.removeEventListener('message', onMsg);
+        resolve(w);
+      }
+    };
+    w.addEventListener('message', onMsg);
+    w.addEventListener('error', () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { w.terminate(); } catch {}
+      reject(new Error('engine error'));
+    });
+    w.postMessage('uci');
+    w.postMessage('isready');
+  });
+}
+
+function getAnalysisEngine(): Promise<AnalysisEngine> {
+  if (enginePromise) return enginePromise;
+  enginePromise = (async () => {
+    let engine: AnalysisEngine;
+    try {
+      engine = { worker: await bootEngine(SF18_URL), kind: 'sf18' };
+    } catch {
+      engine = { worker: await bootEngine(LEGACY_URL), kind: 'legacy' };
+    }
+    liveWorker = engine.worker;
+    engine.worker.postMessage('setoption name Threads value 1');
+    engine.worker.postMessage('setoption name Hash value 64');
+    engine.worker.postMessage('setoption name MultiPV value 1');
+    engine.worker.postMessage('ucinewgame');
+    return engine;
+  })();
+  enginePromise.catch(() => { enginePromise = null; });
+  return enginePromise;
+}
+
+export function getAnalysisEngineKind(): Promise<'sf18' | 'legacy' | 'none'> {
+  return getAnalysisEngine().then((e) => e.kind, () => 'none' as const);
 }
 
 export function terminateAnalysisWorker() {
-  if (analysisWorker) {
-    analysisWorker.terminate();
-    analysisWorker = null;
+  if (liveWorker) {
+    try { liveWorker.terminate(); } catch {}
   }
+  liveWorker = null;
+  enginePromise = null;
+}
+
+export function sideToMoveSign(fen: string): 1 | -1 {
+  return fen.split(' ')[1] === 'b' ? -1 : 1;
 }
 
 let cloudDisabled = false;
@@ -138,8 +208,10 @@ async function fetchLichessCloud(fen: string): Promise<{ eval: number; bestMove:
 
     cloudConsecutiveMisses = 0;
 
+    // Lichess cloud-eval: cp/mate from White's point of view; the engine reports side to move.
+    const sign = sideToMoveSign(fen);
     if (pv.mate !== undefined) {
-      const mateIn = pv.mate;
+      const mateIn = pv.mate * sign;
       const evalScore = mateIn > 0 ? 31000 - Math.abs(mateIn) : -31000 + Math.abs(mateIn);
       cloudHits++;
       return { eval: evalScore, bestMove: firstMove, isMate: true, mateIn };
@@ -147,7 +219,7 @@ async function fetchLichessCloud(fen: string): Promise<{ eval: number; bestMove:
 
     if (pv.cp !== undefined) {
       cloudHits++;
-      return { eval: pv.cp, bestMove: firstMove, isMate: false };
+      return { eval: pv.cp * sign, bestMove: firstMove, isMate: false };
     }
 
     cloudMisses++;
@@ -167,19 +239,28 @@ export function resetCloudStats() {
   cloudConsecutiveMisses = 0;
 }
 
-function evaluatePosition(fen: string, depth: number = 16): Promise<{ eval: number; bestMove: string; isMate: boolean; mateIn?: number }> {
-  return new Promise(async (resolve) => {
-    const cloudResult = await fetchLichessCloud(fen);
-    if (cloudResult) {
-      resolve(cloudResult);
-      return;
-    }
+async function evaluatePosition(fen: string, depth: number = ANALYSIS_DEPTH, moveTimeMs: number = ANALYSIS_MOVETIME_MS, fresh = false): Promise<{ eval: number; bestMove: string; isMate: boolean; mateIn?: number }> {
+  let engine: AnalysisEngine | null = null;
+  try {
+    engine = await getAnalysisEngine();
+  } catch {}
+  if (engine) {
+    const res = await searchPosition(engine, fen, depth, moveTimeMs, fresh);
+    if (res) return res;
+  }
+  const cloudResult = await fetchLichessCloud(fen);
+  if (cloudResult) return cloudResult;
+  return { eval: 0, bestMove: '', isMate: false };
+}
 
-    const w = getAnalysisWorker();
+function searchPosition(engine: AnalysisEngine, fen: string, depth: number, moveTimeMs: number, fresh = false): Promise<{ eval: number; bestMove: string; isMate: boolean; mateIn?: number } | null> {
+  const w = engine.worker;
+  return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       w.removeEventListener('message', handler);
-      resolve({ eval: 0, bestMove: '', isMate: false });
-    }, 5000);
+      w.postMessage('stop');
+      resolve(null);
+    }, Math.max(8000, moveTimeMs + 4000));
 
     let bestMove = '';
     let evalScore = 0;
@@ -190,6 +271,7 @@ function evaluatePosition(fen: string, depth: number = 16): Promise<{ eval: numb
     const handler = (e: MessageEvent) => {
       const msg: string = e.data;
 
+      if (msg.includes(' upperbound') || msg.includes(' lowerbound')) return;
       if (msg.startsWith('info') && msg.includes('score') && msg.includes(' pv ')) {
         const depthMatch = msg.match(/depth (\d+)/);
         const currentDepth = depthMatch ? parseInt(depthMatch[1]) : 0;
@@ -236,9 +318,9 @@ function evaluatePosition(fen: string, depth: number = 16): Promise<{ eval: numb
     };
 
     w.addEventListener('message', handler);
-    w.postMessage('isready');
+    if (fresh) w.postMessage('ucinewgame');
     w.postMessage(`position fen ${fen}`);
-    w.postMessage(`go movetime 200`);
+    w.postMessage(engine.kind === 'sf18' ? `go depth ${depth} movetime ${moveTimeMs}` : 'go movetime 200');
   });
 }
 
@@ -265,19 +347,20 @@ function isSacrificeMove(fen: string, uci: string): boolean {
     if (!move) return false;
 
     const pieceValues: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
-    const movedValue = pieceValues[move.piece] || 0;
+    const movedPiece = move.promotion || move.piece;
+    const movedValue = pieceValues[movedPiece] || 0;
+    if (movedValue < 3) return false;
 
-    if (move.captured) {
-      const capturedValue = pieceValues[move.captured] || 0;
-      if (movedValue > capturedValue + 1) return true;
-    }
+    const captures = chess.moves({ verbose: true }).filter((m) => m.to === to);
+    if (captures.length === 0) return false;
+    const cheapestAttacker = Math.min(...captures.map((m) => pieceValues[m.piece] || 0));
+    const capturedValue = move.captured ? pieceValues[move.captured] || 0 : 0;
+    if (cheapestAttacker < movedValue && movedValue - capturedValue > 1) return true;
 
-    const afterChess = new Chess(chess.fen());
-    const opponentMoves = afterChess.moves({ verbose: true });
-    for (const oppMove of opponentMoves) {
-      if (oppMove.to === to) return true;
-    }
-    return false;
+    const probe = new Chess(chess.fen());
+    probe.move(captures[0]);
+    const defended = probe.moves({ verbose: true }).some((m) => m.to === to);
+    return !defended && movedValue - capturedValue > 1;
   } catch {
     return false;
   }
@@ -301,7 +384,35 @@ const COMMON_OPENINGS: [string[], string][] = [
   [['e4', 'e5'], 'Открытая игра'],
   [['e4'], 'Дебют королевской пешки'],
   [['d4'], 'Дебют ферзевой пешки'],
+  [['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Bc5', 'c3', 'Nf6', 'd4', 'exd4', 'cxd4', 'Bb4+'], 'Итальянская партия'],
+  [['e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Nf6', 'Ng5', 'd5', 'exd5', 'Na5'], 'Защита двух коней'],
+  [['e4', 'e5', 'Nf3', 'Nc6', 'Bb5', 'a6', 'Ba4', 'Nf6', 'O-O', 'Be7', 'Re1', 'b5', 'Bb3', 'd6'], 'Испанская партия'],
+  [['e4', 'e5', 'Nf3', 'Nc6', 'Bb5', 'a6', 'Bxc6', 'dxc6'], 'Испанская партия, разменный вариант'],
+  [['e4', 'e5', 'Nf3', 'Nc6', 'd4', 'exd4', 'Nxd4'], 'Шотландская партия'],
+  [['e4', 'e5', 'Nf3', 'Nc6', 'Nc3', 'Nf6'], 'Дебют четырёх коней'],
+  [['e4', 'c5', 'Nf3', 'd6', 'd4', 'cxd4', 'Nxd4', 'Nf6', 'Nc3', 'a6'], 'Сицилианская защита, Найдорф'],
+  [['e4', 'c5', 'Nf3', 'Nc6', 'd4', 'cxd4', 'Nxd4'], 'Сицилианская защита'],
+  [['e4', 'e6', 'd4', 'd5', 'Nc3', 'Nf6', 'Bg5'], 'Французская защита'],
+  [['e4', 'e6', 'd4', 'd5', 'e5', 'c5', 'c3', 'Nc6', 'Nf3'], 'Французская защита, система с e5'],
+  [['e4', 'c6', 'd4', 'd5', 'Nc3', 'dxe4', 'Nxe4'], 'Защита Каро-Канн'],
+  [['e4', 'd5', 'exd5', 'Qxd5', 'Nc3'], 'Скандинавская защита'],
+  [['d4', 'd5', 'c4', 'e6', 'Nc3', 'Nf6', 'Bg5'], 'Ферзевый гамбит, отказанный'],
+  [['d4', 'd5', 'c4', 'c6', 'Nf3', 'Nf6', 'Nc3'], 'Славянская защита'],
+  [['d4', 'd5', 'c4', 'dxc4', 'Nf3', 'Nf6', 'e3'], 'Принятый ферзевый гамбит'],
+  [['d4', 'Nf6', 'c4', 'e6', 'Nf3', 'b6'], 'Новоиндийская защита'],
+  [['d4', 'Nf6', 'c4', 'g6', 'Nc3', 'Bg7', 'e4', 'd6', 'Nf3', 'O-O'], 'Староиндийская защита'],
+  [['d4', 'Nf6', 'c4', 'g6', 'Nc3', 'd5'], 'Защита Грюнфельда'],
+  [['d4', 'd5', 'Bf4'], 'Лондонская система'],
+  [['d4', 'Nf6', 'Bf4'], 'Лондонская система'],
+  [['e4', 'e5', 'Nf3', 'd6'], 'Защита Филидора'],
+  [['e4', 'e5', 'Bc4'], 'Дебют слона'],
+  [['e4', 'e5', 'Nc3'], 'Венская партия'],
 ];
+
+function isBookMove(sanSoFar: string[]): boolean {
+  if (sanSoFar.length === 0 || sanSoFar.length > 12) return false;
+  return COMMON_OPENINGS.some(([seq]) => seq.length >= sanSoFar.length && sanSoFar.every((m, i) => seq[i] === m));
+}
 
 function detectOpening(moves: string[]): string {
   let bestMatch = 'Неизвестный дебют';
@@ -338,7 +449,7 @@ function calculateAccuracy(moves: AnalyzedMove[], color: 'w' | 'b'): number {
 export async function analyzeGame(
   movesJson: Array<{ from: string; to: string; san: string; promotion?: string }>,
   onProgress?: (current: number, total: number) => void,
-  depth: number = 16
+  depth: number = ANALYSIS_DEPTH
 ): Promise<GameAnalysis> {
   resetCloudStats();
 
@@ -366,9 +477,9 @@ export async function analyzeGame(
       }
     }
 
-    const bestEval = bestResult.eval;
-    const bestMoveUci = bestResult.bestMove;
-    const bestMoveSan = bestMoveUci ? uciToSan(fenBefore, bestMoveUci) : '';
+    let bestEval = bestResult.eval;
+    let bestMoveUci = bestResult.bestMove;
+    let bestMoveSan = bestMoveUci ? uciToSan(fenBefore, bestMoveUci) : '';
 
     let move;
     try {
@@ -407,6 +518,21 @@ export async function analyzeGame(
       afterResult = { eval: 0, bestMove: '', isMate: false };
     }
 
+    if (cpToWinProb(bestEval) - cpToWinProb(-afterResult.eval) >= VERIFY_LOSS && (await getAnalysisEngineKind()) === 'sf18') {
+      try {
+        const deepBefore = await evaluatePosition(fenBefore, VERIFY_DEPTH, VERIFY_MOVETIME_MS, true);
+        const deepAfter = await evaluatePosition(fenAfter, VERIFY_DEPTH, VERIFY_MOVETIME_MS, true);
+        if (deepBefore.bestMove) {
+          bestResult = deepBefore;
+          bestEval = deepBefore.eval;
+          bestMoveUci = deepBefore.bestMove;
+          bestMoveSan = uciToSan(fenBefore, bestMoveUci);
+        }
+        afterResult = deepAfter;
+        nextBestResult = deepAfter;
+      } catch {}
+    }
+
     const bestForPlayer = bestEval;
     const actualForPlayer = -afterResult.eval;
 
@@ -421,7 +547,10 @@ export async function analyzeGame(
     const isBest = playerUci === bestMoveUci || (winProbBefore - winProbAfter) < 1;
     const isSacrifice = isSacrificeMove(fenBefore, playerUci);
 
-    const classification = classifyMove(winProbBefore, winProbAfter, isBest, isSacrifice);
+    const hadForcedMate = bestResult.isMate && (bestResult.mateIn ?? 0) > 0;
+    const keepsMate = afterResult.isMate && (afterResult.mateIn ?? 0) < 0;
+    const isBook = isBookMove([...sanList]);
+    const classification = classifyMove(winProbBefore, winProbAfter, isBest, isSacrifice, { hadForcedMate, keepsMate, isBook });
 
     analyzedMoves.push({
       moveNumber: Math.floor(i / 2) + 1,

@@ -7,6 +7,7 @@ import Header from '@/components/Header';
 import ProfileCard from '@/components/ProfileCard';
 import { supabase, getProfile, getGameHistory, signOut } from '@/lib/supabase';
 import { useTranslation } from '@/lib/i18n';
+import LoginPasswordForm from '@/components/LoginPasswordForm';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -105,6 +106,7 @@ export default function ProfilePage() {
               whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
               Войти через Google
             </motion.button>
+            <LoginPasswordForm />
           </motion.div>
         </div>
       </div>

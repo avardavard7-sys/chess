@@ -6,7 +6,6 @@ import { Chess, Square } from 'chess.js';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getAIMove, parseStockfishMove, DIFFICULTY_CONFIG } from '@/lib/stockfish';
 import ChessClock from '@/components/ChessClock';
-import { getMaxStrengthHint, preloadHintEngine, formatHintScore } from '@/lib/hintEngine';
 import EvalBar from '@/components/EvalBar';
 import { playChessSound, playGameStartSound, playGameEndSound } from '@/lib/sounds';
 import { getOpeningName } from '@/lib/openings';
@@ -61,10 +60,6 @@ export default function ChessBoard({
   const [gameOver, setGameOver] = useState<{ status: string; winner?: string } | null>(null);
   const [playerElo, setPlayerElo] = useState(0);
   const [gamesPlayed, setGamesPlayed] = useState(0);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [adminHint, setAdminHint] = useState<{ from: Square; to: Square } | null>(null);
-  const [adminHintLoading, setAdminHintLoading] = useState(false);
-  const [hintInfo, setHintInfo] = useState('');
   const [boardWidth, setBoardWidth] = useState(480);
   const [evaluation, setEvaluation] = useState(0);
   const [mateIn, setMateIn] = useState<number | null>(null);
@@ -135,51 +130,6 @@ export default function ChessBoard({
     };
   }, [fen, gameOver]);
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    preloadHintEngine();
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    const handleKeyDown = async (e: KeyboardEvent) => {
-      if (e.key !== 'F1') return;
-      e.preventDefault();
-
-      if (adminHint) {
-        setAdminHint(null);
-        setHintInfo('');
-        return;
-      }
-
-      if (adminHintLoading) return;
-      if (gameOver) return;
-
-      setAdminHintLoading(true);
-      setHintInfo('');
-      try {
-        const hint = await getMaxStrengthHint(chess.fen());
-        if (hint) {
-          setAdminHint({ from: hint.from as Square, to: hint.to as Square });
-          setHintInfo(`${formatHintScore(hint)} · depth ${hint.depth}`);
-          setTimeout(() => { setAdminHint(null); setHintInfo(''); }, 12000);
-        } else {
-          const moveStr = await getAIMove(chess.fen(), 'expert');
-          const parsed = parseStockfishMove(moveStr);
-          if (parsed) {
-            setAdminHint({ from: parsed.from as Square, to: parsed.to as Square });
-            setTimeout(() => setAdminHint(null), 12000);
-          }
-        }
-      } catch (err) {
-        console.error('Admin hint error:', err);
-      }
-      setAdminHintLoading(false);
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isAdmin, adminHint, adminHintLoading, gameOver, chess]);
 
   useEffect(() => {
     if (!resumeGameId) return;
@@ -223,7 +173,6 @@ export default function ChessBoard({
           if (data) {
             setPlayerElo(data.elo_rating);
             setGamesPlayed(data.games_played || 0);
-            setIsAdmin(data.is_admin === true);
 
             if (resumeGameId) return;
 
@@ -378,7 +327,6 @@ export default function ChessBoard({
         setDrawFromOpponent(false);
         movesLogRef.current = [];
         setOpeningName('');
-        setAdminHint(null);
         premoveRef.current = null;
         setPremoveSquares(null);
       })
@@ -957,13 +905,6 @@ export default function ChessBoard({
             )}
           </AnimatePresence>
 
-          {isAdmin && (adminHintLoading || hintInfo) && (
-            <div className="absolute top-2 right-2 z-20 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold pointer-events-none"
-              style={{ background: 'rgba(88,28,135,0.85)', color: '#e9d5ff', backdropFilter: 'blur(6px)', border: '1px solid rgba(168,85,247,0.4)' }}>
-              {adminHintLoading ? 'анализ…' : hintInfo}
-            </div>
-          )}
-
           <Chessboard
             position={fen}
             onSquareClick={handleSquareClick}
@@ -975,7 +916,6 @@ export default function ChessBoard({
             boardOrientation={playerColor}
             animationDuration={180}
             areArrowsAllowed={false}
-            customArrows={adminHint ? [[adminHint.from, adminHint.to, 'rgba(168,85,247,0.85)']] : []}
             isDraggablePiece={({ piece }) => {
               if (mode === 'local') return true;
               if (mode === 'ai') return piece[0] === 'w';
@@ -1072,7 +1012,6 @@ export default function ChessBoard({
                   setDrawFromOpponent(false);
                   movesLogRef.current = [];
                   setOpeningName('');
-                  setAdminHint(null);
                   premoveRef.current = null;
                   setPremoveSquares(null);
                 }} className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-green-500/20 text-green-400 hover:bg-green-500/30">✓ {t('accept')}</button>
