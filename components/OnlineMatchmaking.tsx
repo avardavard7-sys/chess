@@ -5,8 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import {
   hasToken, getToken, startOAuth, getNetworkUser,
-  createSeek, streamEvents, type NetworkUser, type NetworkEvent,
-} from '@/lib/lichess';
+  createSeek, streamEvents, type NetworkUser, type NetworkEvent, SEEK_PRESETS } from '@/lib/lichess';
 import { supabase } from '@/lib/supabase';
 import { useTranslation } from '@/lib/i18n';
 import { addToMatchmakingQueue, removeFromMatchmakingQueue, findMatch, createGameSession, getProfile } from '@/lib/supabase';
@@ -23,6 +22,8 @@ export default function OnlineMatchmaking() {
   const [state, setState] = useState<MatchmakingState>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [netUser, setNetUser] = useState<NetworkUser | null>(null);
+  const [tcIdx, setTcIdx] = useState(3);
+  const [rated, setRated] = useState(false);
   const [gameId, setGameId] = useState<string | null>(null);
   const [myColor, setMyColor] = useState<'white' | 'black'>('white');
   const [opponentName, setOpponentName] = useState('Соперник');
@@ -101,7 +102,7 @@ export default function OnlineMatchmaking() {
       }
     }, signal);
 
-    createSeek(token, signal);
+    createSeek(token, signal, { ...SEEK_PRESETS[tcIdx], rated });
 
     searchTimeoutRef.current = setTimeout(() => {
       if (!gameFoundRef.current) {
@@ -367,6 +368,19 @@ export default function OnlineMatchmaking() {
                       <span className="text-xs text-yellow-400">{t('daily_rating')} {netUser.rating}</span>
                     </div>
                     <div className="text-xs text-green-400 mt-1">✓ Доступны тысячи игроков по всему миру</div>
+                    <div className="text-xs text-white/40 mt-3 mb-1">Контроль времени</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {SEEK_PRESETS.map((p, i) => (
+                        <button key={p.label} type="button" onClick={() => setTcIdx(i)}
+                          className={`px-3 py-1 rounded-full text-xs font-semibold border ${i === tcIdx ? 'bg-green-500 border-green-500 text-white' : 'border-white/15 text-white/70'}`}>
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="flex items-center gap-2 mt-2 text-xs text-white/60 cursor-pointer">
+                      <input type="checkbox" checked={rated} onChange={(e) => setRated(e.target.checked)} />
+                      Рейтинговая партия на Lichess
+                    </label>
                   </div>
                 ) : (
                   <div>

@@ -124,7 +124,19 @@ export async function getNetworkUser(token: string): Promise<NetworkUser> {
   };
 }
 
-export async function createSeek(token: string, signal?: AbortSignal): Promise<void> {
+export const SEEK_PRESETS = [
+  { time: 3, increment: 2, label: '3+2' },
+  { time: 5, increment: 3, label: '5+3' },
+  { time: 10, increment: 0, label: '10+0' },
+  { time: 10, increment: 5, label: '10+5' },
+  { time: 15, increment: 10, label: '15+10' },
+];
+
+export async function createSeek(
+  token: string,
+  signal?: AbortSignal,
+  opts: { time: number; increment: number; rated: boolean } = { time: 10, increment: 5, rated: false }
+): Promise<void> {
   try {
     const res = await fetch(`${ENGINE_BASE}/api/board/seek`, {
       method: 'POST',
@@ -133,9 +145,9 @@ export async function createSeek(token: string, signal?: AbortSignal): Promise<v
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({
-        rated: 'false',
-        time: '10',
-        increment: '5',
+        rated: opts.rated ? 'true' : 'false',
+        time: String(opts.time),
+        increment: String(opts.increment),
         color: 'random',
       }),
       signal,
