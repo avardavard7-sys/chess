@@ -50,7 +50,7 @@ export default function OnlineMatchmaking() {
           const { data } = await getProfile(session.user.id);
           if (data) {
             setLocalElo(data.elo_rating);
-            setLocalGames(data.games_played || 0);
+            setLocalGames(data.rated_games ?? 0);
           }
         }
       } catch {}

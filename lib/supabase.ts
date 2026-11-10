@@ -44,11 +44,12 @@ export async function updateElo(userId: string, newElo: number, result: 'win' | 
   }
 
   const { getRank } = await import('./elo');
-  const gamesAfter = (profile.games_played || 0) + 1;
+  const ratedAfter = (profile.rated_games || 0) + 1;
   const updates: Record<string, number | string> = {
     elo_rating: Math.max(0, newElo),
-    rank: gamesAfter < 10 ? '🆕 Новичок' : getRank(Math.max(0, newElo)),
-    games_played: gamesAfter,
+    rank: ratedAfter < 10 ? '🆕 Новичок' : getRank(Math.max(0, newElo)),
+    games_played: (profile.games_played || 0) + 1,
+    rated_games: ratedAfter,
   };
   if (result === 'win') updates.games_won = (profile.games_won || 0) + 1;
   else if (result === 'loss') updates.games_lost = (profile.games_lost || 0) + 1;

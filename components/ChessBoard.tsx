@@ -172,7 +172,7 @@ export default function ChessBoard({
           const { data } = await getProfile(user.id);
           if (data) {
             setPlayerElo(data.elo_rating);
-            setGamesPlayed(data.games_played || 0);
+            setGamesPlayed(data.rated_games ?? 0);
 
             if (resumeGameId) return;
 
